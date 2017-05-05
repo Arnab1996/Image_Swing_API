@@ -1,0 +1,134 @@
+
+
+package net.imagej.ui.swing.overlay;
+
+import java.awt.Shape;
+import java.util.Arrays;
+
+import net.imagej.display.ImageDisplay;
+import net.imagej.display.OverlayView;
+import net.imagej.overlay.Overlay;
+import net.imagej.overlay.PolygonOverlay;
+import net.imagej.ui.swing.tools.SwingPolygonTool;
+import net.imglib2.RealLocalizable;
+import net.imglib2.RealPoint;
+import net.imglib2.roi.PolygonRegionOfInterest;
+
+import org.jhotdraw.draw.AttributeKeys;
+import org.jhotdraw.draw.BezierFigure;
+import org.jhotdraw.draw.Figure;
+import org.jhotdraw.geom.BezierPath.Node;
+import org.scijava.log.LogService;
+import org.scijava.plugin.Parameter;
+import org.scijava.plugin.Plugin;
+import org.scijava.tool.Tool;
+
+@Plugin(type = JHotDrawAdapter.class, priority = SwingPolygonTool.PRIORITY)
+public class PolygonJHotDrawAdapter extends
+	AbstractJHotDrawAdapter<PolygonOverlay, BezierFigure>
+{
+
+	private static PolygonOverlay downcastOverlay(final Overlay overlay) {
+		assert overlay instanceof PolygonOverlay;
+		return (PolygonOverlay) overlay;
+	}
+
+	@Parameter(required = false)
+	private LogService log;
+
+	// -- JHotDrawAdapter methods --
+
+	@Override
+	public boolean supports(final Tool tool) {
+		return tool instanceof SwingPolygonTool;
+	}
+
+	@Override
+	public boolean supports(final Overlay overlay, final Figure figure) {
+		if (!(overlay instanceof PolygonOverlay)) return false;
+		return figure == null || figure instanceof BezierFigure;
+	}
+
+	@Override
+	public Overlay createNewOverlay() {
+		final PolygonOverlay o = new PolygonOverlay(getContext());
+		return o;
+	}
+
+	@Override
+	public Figure createDefaultFigure() {
+		final BezierFigure figure = new PolygonFigure();
+		initDefaultSettings(figure);
+		figure.set(AttributeKeys.WINDING_RULE, AttributeKeys.WindingRule.EVEN_ODD);
+		return figure;
+	}
+
+	@Override
+	public void updateOverlay(final BezierFigure figure, final OverlayView view)
+	{
+		super.updateOverlay(figure, view);
+		final PolygonOverlay poverlay = downcastOverlay(view.getData());
+		final PolygonRegionOfInterest roi = poverlay.getRegionOfInterest();
+		final int nodeCount = figure.getNodeCount();
+		while (roi.getVertexCount() > nodeCount) {
+			roi.removeVertex(nodeCount);
+			if (log != null) log.debug("Removed node from overlay.");
+		}
+		for (int i = 0; i < nodeCount; i++) {
+			final Node node = figure.getNode(i);
+			final double[] position = new double[] { node.x[0], node.y[0] };
+			if (roi.getVertexCount() == i) {
+				roi.addVertex(i, new RealPoint(position));
+				if (log != null) log.debug("Added node to overlay");
+			}
+			else {
+				if ((position[0] != roi.getVertex(i).getDoublePosition(0)) ||
+					(position[1] != roi.getVertex(i).getDoublePosition(1)))
+				{
+					if (log != null) {
+						log.debug(String.format("Vertex # %d moved to %f,%f", i + 1,
+							position[0], position[1]));
+					}
+				}
+				roi.setVertexPosition(i, position);
+			}
+		}
+		poverlay.update();
+	}
+
+	@Override
+	public void updateFigure(final OverlayView view, final BezierFigure figure) {
+		super.updateFigure(view, figure);
+		final PolygonOverlay polygonOverlay = downcastOverlay(view.getData());
+		final PolygonRegionOfInterest roi = polygonOverlay.getRegionOfInterest();
+		final int vertexCount = roi.getVertexCount();
+		while (figure.getNodeCount() > vertexCount) {
+			figure.removeNode(vertexCount);
+		}
+		for (int i = 0; i < vertexCount; i++) {
+			final RealLocalizable vertex = roi.getVertex(i);
+			final double x = vertex.getDoublePosition(0);
+			final double y = vertex.getDoublePosition(1);
+			if (figure.getNodeCount() == i) {
+				figure.addNode(new Node(x, y));
+			}
+			else {
+				final Node node = figure.getNode(i);
+				node.mask = 0;
+				Arrays.fill(node.x, x);
+				Arrays.fill(node.y, y);
+			}
+		}
+	}
+
+	@Override
+	public JHotDrawTool getCreationTool(final ImageDisplay display) {
+		return new IJBezierTool(display, this);
+	}
+
+	@Override
+	public Shape toShape(final BezierFigure figure) {
+		return figure.getBezierPath().toGeneralPath();
+	}
+
+}
